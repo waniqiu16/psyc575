@@ -1,0 +1,275 @@
+---
+title: "Final Project"
+author: "Wani Qiu"
+date: '2022-12-11'
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(simstudy)
+library(dplyr)
+library(here)  # makes reading data more consistent
+library(tidyverse)  # for data manipulation and plotting
+library(haven)  # for importing SPSS/SAS/Stata data
+library(lme4)  # for multilevel analysis
+library(lmerTest)  # for testing coefficients
+library(MuMIn)  # for R^2
+library(sjPlot)  # for plotting effects
+library(emmeans)  # for marginal means
+library(modelsummary)  # for making tables
+library(readxl)
+library(sjmisc)
+library(brms)
+library(sjlabelled)
+library(insight)
+```
+
+#### Research Questions
+
+1. Does the truth value of the information predict children's transmission of interesting information?
+
+2. Does the interestingness of the information predict children's transmission of true information?
+
+### Load data
+```{r}
+dat <- read_xlsx(here("Flashy Coding Sheet exp 2.xlsx")) 
+
+table(dat$age, dat$intrue)
+table(dat$age, dat$trueres)
+
+dat%>%
+  group_by(age, intrue)%>%
+  count(trueres)
+dat%>%
+  group_by(age, intrue)%>%
+  count(inres)
+dat%>%
+  group_by(age)%>%
+  count()
+
+dat$intrue <- as.factor(dat$intrue)
+dat$inres <- as.factor(dat$inres)
+dat$trueres <- as.factor(dat$trueres)
+dat$age <- as.factor(dat$age)
+```
+
+Where intrue = 0 is when the interesting fact is false (and thus the neutral fact true), and intrue = 1 is when the interesting fact is true (and thus the neutral fact false)
+
+
+## RS1. Are children's preferences to teach sensational information predicted by the truth value of the information?
+
+### Test random slopes
+```{r}
+m <- glmer(intrue~ (1|subject), data = dat, family = binomial("logit"))
+summary(m)
+
+# item-level variable, such as intrue, have no person-level variance
+```
+
+```{r}
+#visualize person-level and item-level variance
+set.seed(112)
+# Variation across persons
+random_ids <- sample(unique(dat$subject), size = 10)
+dat %>%
+    filter(subject %in% random_ids) %>%  # select only 10 participants
+    ggplot(aes(x = factor(subject), y = inres)) +
+    geom_jitter(height = 0.5, width = 0.1, alpha = 0.3) +
+    # Add person means
+    stat_summary(fun = "mean", geom = "point", col = "red",
+      shape = 17,  # use triangles
+      size = 2  # make them larger
+    ) +
+    # change axis labels
+    labs(x = "Person ID", y = "fact selection")
+
+# Variation across items
+random_items <- sample(unique(dat$item), size = 10)
+dat %>%
+    filter(item %in% random_items) %>%  # select only 10 participants
+    ggplot(aes(x = factor(item), y = inres)) +
+    geom_jitter(height = 0.5, width = 0.1, alpha = 0.3) +
+    # Add person means
+    stat_summary(fun = "mean", geom = "point", col = "red",
+      shape = 17,  # use triangles
+      size = 2  # make them larger
+    ) +
+    # change axis labels
+    labs(x = "Item Number", y = "fact selection")
+```
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+#brms
+#ICC
+m_ri1 <- brm(inres ~ intrue * age + (1 | subject) + (1 | item),
+           data = dat, family = bernoulli("logit"),
+           prior = prior(student_t(3, 0, 1), class = "b"),
+           seed = 144)
+```
+
+```{r}
+summary(m_ri1)
+tot <- 0.85^2 + 0.55^2+(pi^2/3) #total variance
+subject <- (0.55^2)/tot
+item <- (0.85^2)/tot
+tot #total variance is 4.38
+subject #.070
+item #.167
+```
+
+Total variance is 4.38. Variability at the subject level accounts for 7% of the total variability in responses. Variability at the item level accounts for for 17% of the total variability in responses. We will need to include random intercepts as there is evidence that there is variation across participants and items.
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+m_brm <- brm(inres ~ intrue * age + (1 | subject) + (age | item),
+           data = dat, family = bernoulli("logit"),
+           prior = prior(student_t(3, 0, 1), class = "b"),
+           seed = 144)
+```
+
+```{r}
+summary(m_brm)
+
+loo(m_ri1, m_brm) #since the looic for m_ri1 is smaller, age will not be included as a random slope at the item level
+```
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+m_brm1 <- brm(inres ~ intrue * age + (intrue | subject) + (1 | item),
+           data = dat, family = bernoulli("logit"),
+           prior = prior(student_t(3, 0, 1), class = "b"),
+           seed = 144)
+```
+
+```{r}
+
+loo(m_ri1, m_brm1) #since m_ri1 has a smaller looic value (179.8) compared to m_brm1(181), we do not need to include random slopes for intrue.
+```
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+m_brm2 <- brm(inres ~ intrue * age + (intrue | subject) + (age + intrue| item),
+           data = dat, family = bernoulli("logit"),
+           prior = prior(student_t(3, 0, 1), class = "b"),
+           seed = 144)
+```
+
+```{r}
+loo(m_ri1, m_brm2) #since m_ri1 has a smaller looic value, we do not need to include random slopes for intrue or age at the item level.
+```
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+
+#final model with prior set on interaction term only
+fin_model <- brm(inres ~ intrue * age + (1 | subject) + (1 | item),
+           data = dat, family = bernoulli("logit"),
+           prior = prior(student_t(3, 0, 1), class = "b", coef = "intrue1:age5"),
+           seed = 144)
+
+#final model with prior set on all terms
+fin_model1 <- brm(inres ~ intrue * age + (1 | subject) + (1 | item),
+           data = dat, family = bernoulli("logit"),
+           prior = prior(student_t(3, 0, 1), class = "b"),
+           seed = 144)
+```
+
+```{r}
+tab_model(fin_model, fin_model1)
+summary(fin_model)
+summary(fin_model1)
+#effect size
+performance::r2(fin_model)
+```
+
+The results are mostly comparable for the two models (one with the prior set on the interaction term only, and one with the prior set on all terms). We will use the model with the prior set on all terms as our final model.
+
+### Plot for Research Question 1
+
+```{r}
+bayes_m1 <- conditional_effects(fin_model)
+plot <- plot(bayes_m1, plot = FALSE)[[3]] +
+  labs(x = "Interesting X Truth Condition",
+       y = "Probability of Teaching Interesting Information")+
+  scale_x_discrete("Truth Value",
+  labels = c("0" = "False", 
+             "1" = "True"))
+plot
+```
+
+## RS2. Are children's decisions to teach true information predicted by the interestingness of the information?
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+#ICC
+m_ri2 <- brm(trueres ~ intrue * age + (1 | subject) + (1 | item),
+           data = dat, family = bernoulli("logit"),
+           prior = prior(student_t(3, 0, 1), class = "b"),
+           seed = 144)
+```
+
+```{r}
+summary(m_ri2)
+tot <- 0.98^2 + 0.36^2+(pi^2/3) #total variance
+subject <- (0.98^2)/tot
+item <- (0.36^2)/tot
+tot #total variance is 4.38
+subject #variability at the subject level accounts for 22% of the total variability in responses
+item #variability at the item level accounts for for 3% of the total variability in responses
+```
+We will need to include random intercepts for subject only.
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+#brms with intrue as random slope
+m_brm3 <- brm(trueres ~ intrue * age + (intrue | subject),
+           data = dat, family = bernoulli("logit"),
+           prior = prior(student_t(3, 0, 1), class = "b"),
+           seed = 144)
+```
+
+```{r}
+loo(m_ri2, m_brm3)
+
+#no need to include intrue as random slopes for subject
+```
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+#brms with no random slopes
+m_brm4 <- brm(trueres ~ intrue * age + (1 | subject),
+           data = dat, family = bernoulli("logit"),
+           prior = prior(student_t(3, 0, 1), class = "b"),
+           seed = 144)
+```
+
+```{r}
+loo(m_ri2, m_brm4) #m_brm4 will be our final model with the lowest looic value of 174.3
+```
+
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+#compare model with prior set on all terms vs. prior set only on interaction term
+m_brm5 <- brm(trueres ~ intrue * age + (1 | subject),
+           data = dat, family = bernoulli("logit"),
+           prior = prior(student_t(3, 0, 1), class = "b", coef = "intrue1:age5"),
+           seed = 144)
+```
+
+```{r}
+tab_model(m_brm4, m_brm5)
+summary(m_brm4)
+summary(m_brm5)
+```
+
+The model with the prior set only on the interaction term yielded a smaller odds ratio for the interaction between intrue and age, and larger main effect for age. The standard error for the model with the prior set only on the interaction term had a larger standard error on average. 
+
+```{r message=FALSE, warning=FALSE}
+bayes_m2 <- conditional_effects(m_brm4)
+plot2 <- plot(bayes_m2, plot = FALSE)[[3]] +
+  labs(x = "Interesting X Truth Condition",
+       y = "Probability of Teaching True Information")+
+  scale_x_discrete("Interestingness Value",
+  labels = c("0" = "Neutral", 
+             "1" = "Interesting"))
+plot2
+
+tab_model(fin_model, m_brm4)
+```
+
+
